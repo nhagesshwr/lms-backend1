@@ -297,6 +297,26 @@ class RolePermission(Base):
     __table_args__ = (UniqueConstraint("role", "resource", name="uq_role_resource"),)
 
 
+class EnrollmentRequest(Base):
+    """Employee-initiated enrollment request, pending admin approval."""
+    __tablename__ = "enrollment_requests"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), nullable=False)
+    course_id   = Column(Integer, ForeignKey("courses.id",   ondelete="CASCADE"), nullable=False)
+    status      = Column(String(20), default="pending")   # pending | approved | rejected
+    note        = Column(Text, nullable=True)              # optional message from employee
+    reviewed_by = Column(Integer, ForeignKey("employees.id"), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+
+    employee   = relationship("Employee", foreign_keys=[employee_id])
+    course     = relationship("Course",   foreign_keys=[course_id])
+    reviewer   = relationship("Employee", foreign_keys=[reviewed_by])
+
+    __table_args__ = (UniqueConstraint("employee_id", "course_id", name="uq_enroll_req"),)
+
+
 class AutoAssignRule(Base):
     """Courses that are automatically assigned to new employees when their role is approved.
     If department_id is NULL the rule applies to all departments."""

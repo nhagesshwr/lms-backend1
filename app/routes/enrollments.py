@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
-from app.models import Enrollment, Course, Employee, Certificate, LessonProgress, Lesson
+from app.models import Enrollment, Course, Employee, Certificate, LessonProgress, Lesson, EnrollmentRequest
 from app.schemas import (
     EnrollRequest, AssignCourseRequest, EnrollmentResponse, CertificateResponse
 )
@@ -342,3 +342,152 @@ def update_video_progress(
 
     db.commit()
     return {"watched_seconds": watched_seconds}
+
+
+# ── Enrollment Requests ───────────────────────────────────────────────────────
+
+@router.post("/request")
+def request_enrollment(
+    data: EnrollRequest,
+    db: Session = Depends(get_db),
+    current: Employee = Depends(require_employee),
+):
+    """Employee requests enrollment in a course (pending admin approval)."""
+    course = db.query(Course).filter(Course.id == data.course_id, Course.is_published == True).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found or not published")
+
+    # Already enrolled?
+    if db.query(Enrollment).filter(
+        Enrollment.employee_id == current.id,
+        Enrollment.course_id == data.course_id
+    ).first():
+        raise HTTPException(status_code=400, detail="Already enrolled in this course")
+
+    # Already requested?
+    existing = db.query(EnrollmentRequest).filter(
+        EnrollmentRequest.employee_id == current.id,
+        EnrollmentRequest.course_id == data.course_id,
+    ).first()
+    if existing:
+        if existing.status == "pending":
+            raise HTTPException(status_code=400, detail="Enrollment request already pending")
+        if existing.status == "approved":
+            raise HTTPException(status_code=400, detail="Already enrolled")
+        # rejected — allow re-request
+        existing.status = "pending"
+        existing.reviewed_by = None
+        existing.reviewed_at = None
+        existing.created_at = datetime.utcnow()
+        db.commit()
+        db.refresh(existing)
+        return {"id": existing.id, "status": "pending", "course_id": data.course_id}
+
+    req = EnrollmentRequest(employee_id=current.id, course_id=data.course_id)
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    return {"id": req.id, "status": "pending", "course_id": data.course_id}
+
+
+@router.get("/requests/my")
+def get_my_requests(
+    db: Session = Depends(get_db),
+    current: Employee = Depends(require_employee),
+):
+    """Employee sees their own enrollment requests."""
+    reqs = db.query(EnrollmentRequest).options(
+        joinedload(EnrollmentRequest.course)
+    ).filter(EnrollmentRequest.employee_id == current.id).all()
+    return [
+        {
+            "id": r.id,
+            "course_id": r.course_id,
+            "course_title": r.course.title if r.course else "—",
+            "status": r.status,
+            "created_at": r.created_at,
+            "reviewed_at": r.reviewed_at,
+        }
+        for r in reqs
+    ]
+
+
+@router.get("/requests/all")
+def get_all_requests(
+    db: Session = Depends(get_db),
+    current: Employee = Depends(require_hr_admin),
+):
+    """Admin/super-admin sees all enrollment requests."""
+    reqs = db.query(EnrollmentRequest).options(
+        joinedload(EnrollmentRequest.employee),
+        joinedload(EnrollmentRequest.course),
+        joinedload(EnrollmentRequest.reviewer),
+    ).order_by(EnrollmentRequest.created_at.desc()).all()
+    return [
+        {
+            "id": r.id,
+            "employee_id": r.employee_id,
+            "employee_name": r.employee.name if r.employee else "—",
+            "employee_email": r.employee.email if r.employee else "—",
+            "course_id": r.course_id,
+            "course_title": r.course.title if r.course else "—",
+            "status": r.status,
+            "note": r.note,
+            "created_at": r.created_at,
+            "reviewed_at": r.reviewed_at,
+            "reviewed_by_name": r.reviewer.name if r.reviewer else None,
+        }
+        for r in reqs
+    ]
+
+
+@router.post("/requests/{request_id}/approve")
+def approve_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current: Employee = Depends(require_hr_admin),
+):
+    """Approve an enrollment request — creates the actual enrollment."""
+    req = db.query(EnrollmentRequest).filter(EnrollmentRequest.id == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Request is already {req.status}")
+
+    # Create enrollment if not already enrolled
+    existing = db.query(Enrollment).filter(
+        Enrollment.employee_id == req.employee_id,
+        Enrollment.course_id == req.course_id,
+    ).first()
+    if not existing:
+        db.add(Enrollment(
+            employee_id=req.employee_id,
+            course_id=req.course_id,
+            enrolled_by=current.id,
+        ))
+
+    req.status = "approved"
+    req.reviewed_by = current.id
+    req.reviewed_at = datetime.utcnow()
+    db.commit()
+    return {"message": "Approved", "request_id": request_id}
+
+
+@router.post("/requests/{request_id}/reject")
+def reject_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current: Employee = Depends(require_hr_admin),
+):
+    """Reject an enrollment request."""
+    req = db.query(EnrollmentRequest).filter(EnrollmentRequest.id == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Request is already {req.status}")
+
+    req.status = "rejected"
+    req.reviewed_by = current.id
+    req.reviewed_at = datetime.utcnow()
+    db.commit()
+    return {"message": "Rejected", "request_id": request_id}

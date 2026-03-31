@@ -49,8 +49,8 @@ def get_all_courses_with_lessons(
     return db.query(Course).all()
 
 # Everyone views all published courses
-@router.get("/", response_model=list[CourseResponse])
-@router.get("", response_model=list[CourseResponse])
+@router.get("/", response_model=list[CourseWithLessons])
+@router.get("", response_model=list[CourseWithLessons])
 def get_courses(
     db: Session = Depends(get_db),
     current=Depends(require_employee)

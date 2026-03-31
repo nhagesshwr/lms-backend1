@@ -269,9 +269,16 @@ class CourseResponse(BaseModel):
     category: Optional[str]
     is_published: bool
     created_at: datetime
+    lesson_count: Optional[int] = 0
 
     class Config:
         from_attributes = True
+
+    @classmethod
+    def from_orm_with_count(cls, obj):
+        data = cls.model_validate(obj)
+        data.lesson_count = len(obj.lessons) if hasattr(obj, 'lessons') and obj.lessons else 0
+        return data
 
 
 class CourseWithLessons(BaseModel):
@@ -306,7 +313,7 @@ class EnrollmentResponse(BaseModel):
     completed: bool
     completed_at: Optional[datetime]
     progress_pct: float
-    course: Optional[CourseResponse] = None
+    course: Optional[CourseWithLessons] = None
 
     class Config:
         from_attributes = True
