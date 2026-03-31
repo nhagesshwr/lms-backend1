@@ -4,7 +4,8 @@ from sqlalchemy import or_
 from app.database import get_db
 from app.models import (
     Employee, RoleEnum, Message, Enrollment, Certificate,
-    LessonProgress, PasswordResetToken, LiveClassEnrollment, LiveClassAudience
+    LessonProgress, PasswordResetToken, LiveClassEnrollment, LiveClassAudience,
+    AutoAssignRule,
 )
 from app.schemas import EmployeeCreate, EmployeeUpdate, EmployeeResponse
 from app.auth import hash_password
@@ -40,6 +41,7 @@ def create_employee(
         inactive_existing.is_pending = False
         db.commit()
         db.refresh(inactive_existing)
+        _apply_auto_assign(inactive_existing, db)
         return inactive_existing
 
     new_emp = Employee(
@@ -52,7 +54,32 @@ def create_employee(
     db.add(new_emp)
     db.commit()
     db.refresh(new_emp)
+    _apply_auto_assign(new_emp, db)
     return new_emp
+
+
+def _apply_auto_assign(emp: Employee, db: Session) -> None:
+    """Enroll employee in all active auto-assign courses matching their department."""
+    try:
+        rules = db.query(AutoAssignRule).filter(
+            AutoAssignRule.is_active == True,
+        ).filter(
+            (AutoAssignRule.department_id == None) |
+            (AutoAssignRule.department_id == emp.department_id)
+        ).all()
+
+        for rule in rules:
+            existing = db.query(Enrollment).filter(
+                Enrollment.employee_id == emp.id,
+                Enrollment.course_id == rule.course_id,
+            ).first()
+            if not existing:
+                db.add(Enrollment(employee_id=emp.id, course_id=rule.course_id))
+
+        if rules:
+            db.commit()
+    except Exception:
+        db.rollback()
 
 
 # ── Admin user list — manager+ required ───────────────────────────────────────

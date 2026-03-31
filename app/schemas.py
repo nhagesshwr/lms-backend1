@@ -229,9 +229,17 @@ class LessonResponse(BaseModel):
     order: int
     duration_minutes: Optional[int]
     created_at: datetime
+    has_quiz: bool = False
 
     class Config:
         from_attributes = True
+
+    @classmethod
+    def model_validate(cls, obj, *args, **kwargs):
+        instance = super().model_validate(obj, *args, **kwargs)
+        if hasattr(obj, 'quiz') and obj.quiz is not None:
+            instance.has_quiz = True
+        return instance
 
 
 # ── Course schemas ────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.models import Course, Lesson
 from app.schemas import (
@@ -64,7 +64,9 @@ def get_course(
     db: Session = Depends(get_db),
     current=Depends(require_employee)
 ):
-    course = db.query(Course).filter(Course.id == course_id).first()
+    course = db.query(Course).options(
+        joinedload(Course.lessons).joinedload(Lesson.quiz)
+    ).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
     return course
