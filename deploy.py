@@ -22,7 +22,7 @@ ENV_VARS = {
     "B2_APP_KEY": "K0058h/HYMyXp7I4CqMSVxxQPbSCxZQ",
     "B2_BUCKET_NAME": "Lmsportal",
     "B2_ENDPOINT": "https://s3.us-east-005.backblazeb2.com",
-    "ALLOWED_ORIGINS": "http://localhost:3000",
+    "ALLOWED_ORIGINS": "http://localhost:3000,http://127.0.0.1:3000,https://frontendmodified.vercel.app,https://*.vercel.app",
 }
 # ─────────────────────────────────────────────────────────────────────────────
 
