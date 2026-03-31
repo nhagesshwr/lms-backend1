@@ -63,3 +63,49 @@ def require_manager(current: Employee = Depends(get_current_employee)) -> Employ
 
 def require_employee(current: Employee = Depends(get_current_employee)) -> Employee:
     return current
+
+
+def require_permission(resource: str, action: str):
+    """
+    Dependency factory for dynamic, DB-driven permission checks.
+    Super admin always passes. Other roles are checked against the
+    role_permissions table (seeded with defaults on first use).
+
+    Usage:
+        @router.post("/something")
+        def create_something(current = Depends(require_permission("courses", "create"))):
+            ...
+    """
+    def dependency(
+        db: Session = Depends(get_db),
+        current: Employee = Depends(get_current_employee),
+    ) -> Employee:
+        if current.role == RoleEnum.super_admin:
+            return current
+
+        from app.models import RolePermission
+        perm = db.query(RolePermission).filter(
+            RolePermission.role == current.role,
+            RolePermission.resource == resource,
+        ).first()
+
+        if not perm:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied: no permissions configured for this role.",
+            )
+
+        action_map = {
+            "view":   perm.can_view,
+            "create": perm.can_create,
+            "update": perm.can_update,
+            "delete": perm.can_delete,
+        }
+        allowed = action_map.get(action, False)
+        if not allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"You do not have {action} permission for {resource}.",
+            )
+        return current
+    return dependency

@@ -5,7 +5,8 @@ from app.database import Base, engine
 from app.routes import (
     auth as auth_router, courses, departments, employees, uploads,
     enrollments, quizzes, assignments, certificates, messages, doubts,
-    live_classes, activity, notifications, leaderboard, settings as settings_router
+    live_classes, activity, notifications, leaderboard, settings as settings_router,
+    auto_assign, role_permissions,
 )
 import os
 import time
@@ -102,6 +103,8 @@ app.include_router(activity.router)
 app.include_router(notifications.router)
 app.include_router(leaderboard.router)
 app.include_router(settings_router.router)
+app.include_router(auto_assign.router)
+app.include_router(role_permissions.router)
 
 
 @app.get("/favicon.ico", include_in_schema=False)

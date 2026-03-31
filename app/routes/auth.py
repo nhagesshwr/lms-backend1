@@ -9,7 +9,7 @@ from app.schemas import (
     ChangePasswordRequest, ForgotPasswordRequest, ResetPasswordRequest,
     UpdateProfileRequest
 )
-from app.auth import hash_password, verify_password, create_access_token
+from app.auth import hash_password, verify_password, create_access_token, create_refresh_token, decode_refresh_token
 from app.dependencies import get_current_employee, require_super_admin, require_hr_admin
 from datetime import datetime, timedelta
 import secrets
@@ -95,14 +95,14 @@ class AssignRoleRequest(BaseModel):
     department_id: Optional[int] = None
 
 
-@router.put("/assign-role/{employee_id}", response_model=EmployeeResponse)
+@router.put("/assign-role/{employee_id}")
 def assign_role(
     employee_id: int,
     data: AssignRoleRequest,
     db: Session = Depends(get_db),
     current: Employee = Depends(require_hr_admin),
 ):
-    from app.models import RoleEnum
+    from app.models import RoleEnum, AutoAssignRule, Enrollment
     emp = db.query(Employee).filter(Employee.id == employee_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="User not found")
@@ -122,12 +122,50 @@ def assign_role(
     db.commit()
     db.refresh(emp)
 
+    # ── Auto-assign courses ───────────────────────────────────────────────────
+    auto_enrolled = 0
+    try:
+        rules = db.query(AutoAssignRule).filter(
+            AutoAssignRule.is_active == True,
+        ).filter(
+            (AutoAssignRule.department_id == None) |
+            (AutoAssignRule.department_id == emp.department_id)
+        ).all()
+
+        for rule in rules:
+            existing = db.query(Enrollment).filter(
+                Enrollment.employee_id == emp.id,
+                Enrollment.course_id == rule.course_id,
+            ).first()
+            if not existing:
+                db.add(Enrollment(
+                    employee_id=emp.id,
+                    course_id=rule.course_id,
+                    enrolled_by=current.id,
+                ))
+                auto_enrolled += 1
+
+        if auto_enrolled:
+            db.commit()
+    except Exception:
+        pass
+
     try:
         _send_role_assigned_email(emp.email, emp.name, data.role, db)
     except Exception:
         pass
 
-    return emp
+    return {
+        "id": emp.id,
+        "name": emp.name,
+        "email": emp.email,
+        "role": emp.role,
+        "is_active": emp.is_active,
+        "is_pending": emp.is_pending,
+        "department_id": emp.department_id,
+        "created_at": emp.created_at,
+        "auto_enrolled_count": auto_enrolled,
+    }
 
 
 def _send_role_assigned_email(to_email: str, name: str, role: str, db=None):
@@ -192,9 +230,41 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="Account is deactivated. Contact your administrator.")
     if employee.is_pending:
         raise HTTPException(status_code=403, detail="Your account is awaiting admin approval. You will receive an email once your role has been assigned.")
-    token = create_access_token({"sub": employee.email, "role": employee.role, "id": employee.id})
+    access_token = create_access_token({"sub": employee.email, "role": employee.role, "id": employee.id})
+    refresh_token = create_refresh_token({"sub": employee.email, "id": employee.id})
     return {
-        "access_token": token,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "role": employee.role,
+        "name": employee.name,
+        "id": employee.id,
+    }
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+@router.post("/refresh", response_model=TokenResponse)
+def refresh(data: RefreshRequest, db: Session = Depends(get_db)):
+    payload = decode_refresh_token(data.refresh_token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+
+    employee = db.query(Employee).filter(Employee.email == payload.get("sub")).first()
+    if not employee:
+        raise HTTPException(status_code=401, detail="User not found")
+    if not employee.is_active:
+        raise HTTPException(status_code=403, detail="Account is deactivated")
+    if employee.is_pending:
+        raise HTTPException(status_code=403, detail="Account is awaiting approval")
+
+    new_access_token = create_access_token({"sub": employee.email, "role": employee.role, "id": employee.id})
+    new_refresh_token = create_refresh_token({"sub": employee.email, "id": employee.id})
+    return {
+        "access_token": new_access_token,
+        "refresh_token": new_refresh_token,
         "token_type": "bearer",
         "role": employee.role,
         "name": employee.name,

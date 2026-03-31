@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Enum, Boolean, Text, Float, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Enum, Boolean, Text, Float, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
@@ -277,6 +277,41 @@ class LiveClassAudience(Base):
 
     live_class = relationship("LiveClass", back_populates="audience")
     employee = relationship("Employee", foreign_keys=[employee_id])
+
+
+class RolePermission(Base):
+    """Stores configurable permissions per role per resource.
+    Super admin always has full access and is never stored here.
+    Rows are seeded with defaults on first access."""
+    __tablename__ = "role_permissions"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    role       = Column(Enum(RoleEnum), nullable=False)
+    resource   = Column(String(64), nullable=False)
+    can_view   = Column(Boolean, default=False)
+    can_create = Column(Boolean, default=False)
+    can_update = Column(Boolean, default=False)
+    can_delete = Column(Boolean, default=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("role", "resource", name="uq_role_resource"),)
+
+
+class AutoAssignRule(Base):
+    """Courses that are automatically assigned to new employees when their role is approved.
+    If department_id is NULL the rule applies to all departments."""
+    __tablename__ = "auto_assign_rules"
+
+    id            = Column(Integer, primary_key=True, index=True)
+    course_id     = Column(Integer, ForeignKey("courses.id",     ondelete="CASCADE"), nullable=False)
+    department_id = Column(Integer, ForeignKey("departments.id", ondelete="CASCADE"), nullable=True)
+    created_by    = Column(Integer, ForeignKey("employees.id",   ondelete="SET NULL"), nullable=True)
+    is_active     = Column(Boolean, default=True)
+    created_at    = Column(DateTime, default=datetime.utcnow)
+
+    course      = relationship("Course",     foreign_keys=[course_id])
+    department  = relationship("Department", foreign_keys=[department_id])
+    creator     = relationship("Employee",   foreign_keys=[created_by])
 
 
 class SmtpConfig(Base):

@@ -293,6 +293,52 @@ def check_enrollment(
         "enrolled": enrollment is not None,
         "progress_pct": progress_pct,
         "completed": is_completed,
-        "progress": [{"lesson_id": p.lesson_id, "completed": p.completed} for p in progress_records],
-        "has_certificate": has_cert
+        "progress": [
+            {
+                "lesson_id": p.lesson_id,
+                "completed": p.completed,
+                "watched_seconds": p.watched_seconds or 0,
+            }
+            for p in progress_records
+        ],
+        "has_certificate": has_cert,
     }
+
+
+@router.put("/video-progress")
+def update_video_progress(
+    lesson_id: int,
+    course_id: int,
+    watched_seconds: int,
+    db: Session = Depends(get_db),
+    current: Employee = Depends(require_employee),
+):
+    """Persist the current playback position so users can resume later."""
+    if watched_seconds < 0:
+        watched_seconds = 0
+
+    enrollment = db.query(Enrollment).filter(
+        Enrollment.employee_id == current.id,
+        Enrollment.course_id == course_id,
+    ).first()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Not enrolled in this course")
+
+    existing = db.query(LessonProgress).filter(
+        LessonProgress.enrollment_id == enrollment.id,
+        LessonProgress.lesson_id == lesson_id,
+    ).first()
+
+    if existing:
+        # Only advance the saved position — never rewind (prevents seek-back data loss)
+        if watched_seconds > existing.watched_seconds:
+            existing.watched_seconds = watched_seconds
+    else:
+        db.add(LessonProgress(
+            enrollment_id=enrollment.id,
+            lesson_id=lesson_id,
+            watched_seconds=watched_seconds,
+        ))
+
+    db.commit()
+    return {"watched_seconds": watched_seconds}
